@@ -1,0 +1,31 @@
+name: ZeroClaw
+version: 0.0.1
+slug: zeroclaw
+description: Minimal ZeroClaw add-on scaffold.
+url: https://github.com/dbobylev/zeroclaw-haos-addon/tree/main/zeroclaw
+arch:
+  - armv7
+  - aarch64
+init: false
+image: ghcr.io/dbobylev/{arch}-addon-zeroclaw
+homeassistant_api: true
+hassio_api: false
+hassio_role: default
+options:
+  provider: openrouter
+  api_key: null
+  model: null
+  telegram_bot_token: null
+  telegram_allowed_users: ["*"]
+  autonomy_level: supervised
+  allow_cover: false
+  allow_script: false
+schema:
+  provider: str
+  api_key: password
+  model: str?
+  telegram_bot_token: password
+  telegram_allowed_users: [str]
+  autonomy_level: list(read_only|supervised|full)
+  allow_cover: bool
+  allow_script: bool

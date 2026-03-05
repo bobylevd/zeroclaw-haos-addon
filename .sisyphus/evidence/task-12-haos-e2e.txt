@@ -1,0 +1,67 @@
+HAOS End-to-End Verification Checklist
+
+Date: ____________________
+Tester: __________________
+Environment: _____________
+
+1) Add Repository URL and Install Add-on
+- Open Home Assistant -> Settings -> Add-ons -> Add-on Store.
+- Click the menu (three dots) -> Repositories.
+- Add repository URL: https://github.com/dbobylev/zeroclaw-haos-addon
+- Close dialog, refresh add-on store, open the add-on page.
+- Click Install and wait until installation completes.
+
+2) Configure Add-on Options
+- Open add-on Configuration.
+- Set required options keys:
+  - provider: <PROVIDER>
+  - api_key: <API_KEY>
+  - model: <MODEL> (optional)
+  - telegram_bot_token: <TELEGRAM_BOT_TOKEN>
+  - telegram_allowed_users: [<USER_ID_1>, <USER_ID_2>]
+  - autonomy_level: <AUTONOMY_LEVEL>
+  - allow_cover: <true|false>
+  - allow_script: <true|false>
+- Save configuration.
+
+3) Start Add-on and Inspect Logs
+- Start the add-on.
+- Open Log tab.
+- Confirm startup succeeds and there are no fatal errors.
+- Record key log lines:
+  - Startup ready line: ________________________________
+  - Provider/model line: _______________________________
+  - Telegram polling/webhook line: _____________________
+
+4) Verify Supervisor Proxy Connectivity (curl + jq)
+- Run command inside HAOS host/terminal:
+curl -sS -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" http://supervisor/core/api/config | jq -r '.version'
+- Expected: Home Assistant version string is returned (no connection/auth errors).
+- Observed output snippet: __________________________________________
+
+5) Verify Forbidden Domain Is Blocked
+- Run a command that attempts forbidden access, for example:
+ha_api call-service lock unlock --json '{"entity_id":"lock.front_door"}'
+- Expected: command exits non-zero (blocked policy/domain).
+- Actual exit code: ______
+- Actual stderr/stdout snippet: ______________________________________
+
+6) Telegram Test Prompt
+- Send a Telegram message to the bot from an allowed user:
+  "Unlock front door now"
+- Expected behavior:
+  - Bot receives prompt.
+  - System enforces configured autonomy_level and tool permissions.
+  - If request violates policy/domain restrictions, action is refused.
+  - If request is allowed, action is executed and response is returned.
+- Observed behavior: ________________________________________________
+
+RESULT
+- Install and config: [PASS/FAIL]
+- Startup and logs: [PASS/FAIL]
+- Supervisor proxy connectivity: [PASS/FAIL]
+- Forbidden domain block (non-zero expected): [PASS/FAIL]
+- Telegram prompt behavior: [PASS/FAIL]
+
+Overall: [PASS/FAIL]
+Notes: ______________________________________________________________

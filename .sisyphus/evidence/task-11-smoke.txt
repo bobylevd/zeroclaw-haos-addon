@@ -1,0 +1,7 @@
+Task 11 Smoke Evidence
+
+Command:
+  bash scripts/smoke.sh
+
+Observed output:
+  OK

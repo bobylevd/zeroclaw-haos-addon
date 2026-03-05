@@ -1,0 +1,13 @@
+Task 12 Evidence: HA API Connectivity
+
+Run inside the add-on container (or HAOS shell where SUPERVISOR_TOKEN is available):
+  curl -sS -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" http://supervisor/core/api/config | jq -r '.version'
+
+Expected:
+  Prints a Home Assistant version string.
+
+Observed output:
+  <paste here>
+
+Result:
+  PASS / FAIL

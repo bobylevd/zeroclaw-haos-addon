@@ -1,0 +1,9 @@
+build_from:
+  armv7: ghcr.io/home-assistant/armv7-base-debian:bookworm
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+labels:
+  org.opencontainers.image.title: "ZeroClaw"
+  org.opencontainers.image.description: "Minimal Home Assistant add-on scaffold"
+args:
+  BUILD_DESCRIPTION: "ZeroClaw runtime image"
+  ZEROCLAW_VERSION: "v0.1.7"

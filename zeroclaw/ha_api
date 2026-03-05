@@ -1,0 +1,239 @@
+#!/usr/bin/python3
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+DEFAULT_BASE_URL = "http://supervisor/core/api"
+ALLOW_TEST_BASE_URL_ENV = "HA_API_ALLOW_TEST_BASE_URL"
+BASE_URL_ENV = "HA_BASE_URL"
+TOKEN_ENV = "SUPERVISOR_TOKEN"
+
+TIMEOUT_SECONDS = 10
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+SAFE_SERVICE_DOMAINS = {
+    "light",
+    "switch",
+    "scene",
+    "fan",
+    "climate",
+    "media_player",
+}
+
+OPTIONAL_SERVICE_DOMAINS = {
+    "cover": "HA_API_ALLOW_COVER",
+    "script": "HA_API_ALLOW_SCRIPT",
+}
+
+DENIED_SERVICE_DOMAINS = {"lock", "alarm_control_panel"}
+DENIED_SUBSTRINGS = ("restart", "shutdown", "reboot")
+
+
+def fail(message):
+    print(f"ERROR: {message}", file=sys.stderr)
+    return 1
+
+
+def resolve_base_url():
+    configured_base_url = os.environ.get(BASE_URL_ENV)
+    if configured_base_url:
+        if os.environ.get(ALLOW_TEST_BASE_URL_ENV) != "1":
+            raise ValueError(
+                f"{BASE_URL_ENV} override is disabled; set {ALLOW_TEST_BASE_URL_ENV}=1 to allow it"
+            )
+        return configured_base_url.rstrip("/")
+    return DEFAULT_BASE_URL
+
+
+def get_token():
+    token = os.environ.get(TOKEN_ENV)
+    if not token:
+        raise ValueError(f"{TOKEN_ENV} is required")
+    return token
+
+
+def read_limited_response(response):
+    chunks = []
+    total = 0
+    while True:
+        chunk = response.read(8192)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            raise ValueError(
+                f"response exceeded {MAX_RESPONSE_BYTES} bytes limit"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def request_json(method, path, token, base_url, body=None):
+    url = f"{base_url}{path}"
+    data = None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+    if body is not None:
+        data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(url, method=method, headers=headers, data=data)
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            status = response.getcode()
+            payload = read_limited_response(response)
+            if status < 200 or status >= 300:
+                raise ValueError(f"request failed with HTTP {status}")
+            return payload
+    except urllib.error.HTTPError as err:
+        detail = ""
+        try:
+            detail_bytes = read_limited_response(err)
+            detail = detail_bytes.decode("utf-8", errors="replace").strip()
+        except Exception:
+            detail = ""
+        if detail:
+            raise ValueError(f"request failed with HTTP {err.code}: {detail}")
+        raise ValueError(f"request failed with HTTP {err.code}")
+    except urllib.error.URLError as err:
+        reason = getattr(err, "reason", None)
+        if reason:
+            raise ValueError(f"request failed: {reason}")
+        raise ValueError("request failed")
+
+
+def allowed_domains():
+    domains = set(SAFE_SERVICE_DOMAINS)
+    for domain, env_var in OPTIONAL_SERVICE_DOMAINS.items():
+        if os.environ.get(env_var) == "1":
+            domains.add(domain)
+    return domains
+
+
+def ensure_allowed_service(domain, service):
+    domain_lower = domain.lower()
+    service_lower = service.lower()
+
+    for blocked in DENIED_SUBSTRINGS:
+        if blocked in domain_lower or blocked in service_lower:
+            raise ValueError(
+                f"disallowed domain/service; contains blocked keyword '{blocked}'"
+            )
+
+    if domain_lower in DENIED_SERVICE_DOMAINS:
+        raise ValueError(f"disallowed domain/service: '{domain_lower}'")
+
+    if domain_lower not in allowed_domains():
+        raise ValueError(
+            f"disallowed domain/service: '{domain_lower}' is not in allowed service domains"
+        )
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="ha_api",
+        description="Constrained Home Assistant Core API helper",
+        epilog=(
+            "Environment variables: SUPERVISOR_TOKEN (required), "
+            "HA_API_ALLOW_TEST_BASE_URL=1 with HA_BASE_URL for tests, "
+            "HA_API_ALLOW_COVER=1 to allow cover domain, "
+            "HA_API_ALLOW_SCRIPT=1 to allow script domain."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("health", help="Check API health via /config")
+    subparsers.add_parser("list-states", help="GET /states")
+    subparsers.add_parser("list-services", help="GET /services")
+
+    get_state = subparsers.add_parser("get-state", help="GET /states/<entity_id>")
+    get_state.add_argument("entity_id")
+
+    call_service = subparsers.add_parser(
+        "call-service", help="POST /services/<domain>/<service>"
+    )
+    call_service.add_argument("domain")
+    call_service.add_argument("service")
+    call_service.add_argument("--json", required=True, dest="json_payload")
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.command == "call-service":
+        try:
+            ensure_allowed_service(args.domain, args.service)
+        except ValueError as err:
+            return fail(str(err))
+
+    try:
+        base_url = resolve_base_url()
+        token = get_token()
+    except ValueError as err:
+        return fail(str(err))
+
+    try:
+        if args.command == "health":
+            request_json("GET", "/config", token, base_url)
+            print("OK")
+            return 0
+
+        if args.command == "list-states":
+            output = request_json("GET", "/states", token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "list-services":
+            output = request_json("GET", "/services", token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "get-state":
+            encoded_entity_id = urllib.parse.quote(args.entity_id, safe="")
+            output = request_json("GET", f"/states/{encoded_entity_id}", token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "call-service":
+            try:
+                payload = json.loads(args.json_payload)
+            except json.JSONDecodeError as err:
+                raise ValueError(f"invalid JSON payload: {err.msg}")
+
+            if not isinstance(payload, (dict, list)):
+                raise ValueError("JSON payload must be an object or array")
+
+            encoded_domain = urllib.parse.quote(args.domain, safe="")
+            encoded_service = urllib.parse.quote(args.service, safe="")
+            output = request_json(
+                "POST",
+                f"/services/{encoded_domain}/{encoded_service}",
+                token,
+                base_url,
+                body=payload,
+            )
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+    except ValueError as err:
+        if args.command == "health":
+            print(f"FAIL: {err}", file=sys.stderr)
+            return 1
+        return fail(str(err))
+
+    return fail("unsupported command")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

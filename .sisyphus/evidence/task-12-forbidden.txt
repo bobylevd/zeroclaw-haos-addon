@@ -1,0 +1,16 @@
+Task 12 Evidence: Forbidden Domain Refused
+
+Run inside the add-on container:
+  ha_api call-service lock unlock --json '{"entity_id":"lock.front_door"}'
+
+Expected:
+  Exit non-zero and a clear error.
+
+Observed exit code:
+  <paste here>
+
+Observed stderr/stdout:
+  <paste here>
+
+Result:
+  PASS / FAIL
