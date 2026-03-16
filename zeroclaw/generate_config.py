@@ -110,6 +110,7 @@ def build_config(options: dict[str, object]) -> str:
             "[autonomy]",
             f"level = {toml_string(autonomy_level)}",
             'allowed_commands = ["ha_api"]',
+            "workspace_only = true",
             "",
             "[http_request]",
             "enabled = false",
