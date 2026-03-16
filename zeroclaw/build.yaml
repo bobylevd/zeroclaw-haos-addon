@@ -1,5 +1,5 @@
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:trixie
 labels:
   org.opencontainers.image.title: "ZeroClaw"
   org.opencontainers.image.description: "Minimal Home Assistant add-on scaffold"
