@@ -6,7 +6,7 @@ url: https://github.com/dbobylev/zeroclaw-haos-addon/tree/main/zeroclaw
 arch:
   - aarch64
 init: false
-image: ghcr.io/dbobylev/{arch}-addon-zeroclaw
+image: ghcr.io/bobylevd/{arch}-addon-zeroclaw
 homeassistant_api: true
 hassio_api: false
 hassio_role: default
