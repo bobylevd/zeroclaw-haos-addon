@@ -89,47 +89,32 @@ def build_config(options: dict[str, object]) -> str:
     allowed_users = normalize_allowed_users(options.get("telegram_allowed_users"))
     autonomy_level = map_autonomy_level(options.get("autonomy_level"))
 
-    lines = [
-        f"default_provider = {toml_string(provider)}",
-        f"api_key = {toml_string(api_key)}",
-    ]
-
+    model_line = ""
     if isinstance(model, str) and model.strip():
-        lines.append(f"default_model = {toml_string(model)}")
+        model_line = f"default_model = {toml_string(model)}"
 
-    lines.extend(
-        [
-            "",
-            "[channels_config]",
-            "cli = false",
-            "",
-            "[channels_config.telegram]",
-            f"bot_token = {toml_string(bot_token)}",
-            f"allowed_users = {json.dumps(allowed_users, ensure_ascii=False)}",
-            "",
-            "[autonomy]",
-            f"level = {toml_string(autonomy_level)}",
-            'allowed_commands = ["ha_api"]',
-            "workspace_only = true",
-            'forbidden_paths = []',
-            "max_actions_per_hour = 120",
-            "max_cost_per_day_cents = 500",
-            "",
-            "[http_request]",
-            "enabled = false",
-            "",
-            "[browser]",
-            "enabled = false",
-            "",
-            "[secrets]",
-            "encrypt = true",
-            "",
-            "[memory]",
-            'backend = "sqlite"',
-            "auto_save = true",
-            "",
-        ]
-    )
+    config_text = f"""\
+default_provider = {toml_string(provider)}
+api_key = {toml_string(api_key)}
+default_temperature = 0.7
+{model_line}
+
+[channels_config]
+cli = false
+
+[channels_config.telegram]
+bot_token = {toml_string(bot_token)}
+allowed_users = {json.dumps(allowed_users, ensure_ascii=False)}
+
+[autonomy]
+level = {toml_string(autonomy_level)}
+allowed_commands = ["ha_api"]
+workspace_only = true
+forbidden_paths = []
+max_actions_per_hour = 120
+max_cost_per_day_cents = 500
+"""
+    lines = [config_text.strip(), ""]
 
     return "\n".join(lines)
 
