@@ -94,7 +94,6 @@ if is_daemon_start "$@"; then
 
     ensure_skill
     generate_config
-    telegram_health_check
     exec zeroclaw daemon
 fi
 
