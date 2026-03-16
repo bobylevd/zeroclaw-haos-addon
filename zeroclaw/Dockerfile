@@ -14,9 +14,7 @@ RUN set -eux; \
         build_arch="$(uname -m)"; \
     fi; \
     case "${build_arch}" in \
-        aarch64) target="aarch64-unknown-linux-gnu" ;; \
-        arm64) target="aarch64-unknown-linux-gnu" ;; \
-        armv7) target="armv7-unknown-linux-gnueabihf" ;; \
+        aarch64|arm64) target="aarch64-unknown-linux-gnu" ;; \
         x86_64|amd64) target="x86_64-unknown-linux-gnu" ;; \
         *) echo "Unsupported BUILD_ARCH: ${build_arch}" >&2; exit 1 ;; \
     esac; \

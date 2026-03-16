@@ -4,7 +4,6 @@ slug: zeroclaw
 description: Minimal ZeroClaw add-on scaffold.
 url: https://github.com/dbobylev/zeroclaw-haos-addon/tree/main/zeroclaw
 arch:
-  - armv7
   - aarch64
 init: false
 image: ghcr.io/dbobylev/{arch}-addon-zeroclaw
