@@ -94,6 +94,7 @@ if is_daemon_start "$@"; then
 
     ensure_skill
     generate_config
+    chmod 600 "${CONFIG_PATH}"
     exec zeroclaw daemon
 fi
 

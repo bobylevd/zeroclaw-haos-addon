@@ -111,6 +111,9 @@ def build_config(options: dict[str, object]) -> str:
             f"level = {toml_string(autonomy_level)}",
             'allowed_commands = ["ha_api"]',
             "workspace_only = true",
+            'forbidden_paths = []',
+            "max_actions_per_hour = 120",
+            "max_cost_per_day_cents = 500",
             "",
             "[http_request]",
             "enabled = false",
@@ -123,6 +126,7 @@ def build_config(options: dict[str, object]) -> str:
             "",
             "[memory]",
             'backend = "sqlite"',
+            "auto_save = true",
             "",
         ]
     )
