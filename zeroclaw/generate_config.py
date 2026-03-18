@@ -132,6 +132,7 @@ workspace_only = true
 forbidden_paths = []
 max_actions_per_hour = 120
 max_cost_per_day_cents = 500
+shell_env_passthrough = ["SUPERVISOR_TOKEN", "HA_API_ALLOW_COVER", "HA_API_ALLOW_SCRIPT", "HA_API_ALLOW_AUTOMATION", "HA_API_ALLOW_EVENT"]
 
 [agent]
 max_tool_iterations = 15
