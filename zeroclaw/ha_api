@@ -3,10 +3,12 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 
 DEFAULT_BASE_URL = "http://supervisor/core/api"
@@ -24,12 +26,35 @@ SAFE_SERVICE_DOMAINS = {
     "fan",
     "climate",
     "media_player",
+    "humidifier",
+    "vacuum",
+    "water_heater",
+    "remote",
+    "button",
+    "number",
+    "select",
+    "input_boolean",
+    "input_number",
+    "input_select",
+    "input_datetime",
+    "input_text",
+    "homeassistant",
+    "notify",
+    "tts",
+    "timer",
+    "counter",
+    "todo",
+    "calendar",
 }
 
 OPTIONAL_SERVICE_DOMAINS = {
     "cover": "HA_API_ALLOW_COVER",
     "script": "HA_API_ALLOW_SCRIPT",
+    "automation": "HA_API_ALLOW_AUTOMATION",
 }
+
+ALLOW_EVENT_ENV = "HA_API_ALLOW_EVENT"
+ALLOW_AUTOMATION_ENV = "HA_API_ALLOW_AUTOMATION"
 
 DENIED_SERVICE_DOMAINS = {"lock", "alarm_control_panel"}
 DENIED_SUBSTRINGS = ("restart", "shutdown", "reboot")
@@ -72,6 +97,34 @@ def read_limited_response(response):
             )
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+def request_raw(path, token, base_url):
+    url = f"{base_url}{path}"
+    headers = {"Authorization": f"Bearer {token}"}
+    request = urllib.request.Request(url, method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            content_type = response.headers.get("Content-Type", "")
+            chunks = []
+            total = 0
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_IMAGE_BYTES:
+                    raise ValueError("image response too large")
+                chunks.append(chunk)
+            return b"".join(chunks), content_type
+    except urllib.error.HTTPError as err:
+        raise ValueError(f"request failed with HTTP {err.code}")
+    except urllib.error.URLError as err:
+        reason = getattr(err, "reason", None)
+        raise ValueError(f"request failed: {reason}" if reason else "request failed")
 
 
 def request_json(method, path, token, base_url, body=None):
@@ -165,16 +218,143 @@ def build_parser():
     call_service.add_argument("service")
     call_service.add_argument("--json", required=True, dest="json_payload")
 
+    template = subparsers.add_parser("template", help="Render a Jinja2 template")
+    template.add_argument("--template", required=True, dest="template_text")
+
+    history = subparsers.add_parser("history", help="GET entity history")
+    history.add_argument("entity_id")
+    history.add_argument("--hours", type=int, default=24)
+
+    fire_event = subparsers.add_parser(
+        "fire-event", help="POST /events/<event_type>"
+    )
+    fire_event.add_argument("event_type")
+    fire_event.add_argument("--json", required=True, dest="json_payload")
+
+    list_areas = subparsers.add_parser(
+        "list-areas", help="List areas with their entities"
+    )
+
+    list_devices = subparsers.add_parser(
+        "list-devices", help="List devices with their entities"
+    )
+
+    create_automation = subparsers.add_parser(
+        "create-automation", help="Create or update an automation"
+    )
+    create_automation.add_argument("automation_id")
+    create_automation.add_argument("--json", required=True, dest="json_payload")
+
+    get_automation = subparsers.add_parser(
+        "get-automation", help="Get automation config by ID"
+    )
+    get_automation.add_argument("automation_id")
+
+    delete_automation = subparsers.add_parser(
+        "delete-automation", help="Delete an automation by ID"
+    )
+    delete_automation.add_argument("automation_id")
+
+    subparsers.add_parser(
+        "list-automations",
+        help="List all automations with state and last triggered",
+    )
+
+    logbook = subparsers.add_parser(
+        "logbook", help="GET human-readable event log"
+    )
+    logbook.add_argument("--hours", type=int, default=24)
+    logbook.add_argument("--entity-id", default=None, dest="entity_id")
+
+    subparsers.add_parser(
+        "list-calendars", help="List all calendar entities"
+    )
+
+    calendar_events = subparsers.add_parser(
+        "calendar-events", help="GET events from a calendar entity"
+    )
+    calendar_events.add_argument("entity_id")
+    calendar_events.add_argument("--hours", type=int, default=24,
+                                 help="Hours ahead to fetch events")
+
+    camera_snapshot = subparsers.add_parser(
+        "camera-snapshot", help="GET camera proxy image (saves to workspace)"
+    )
+    camera_snapshot.add_argument("entity_id")
+
+    subparsers.add_parser("error-log", help="GET Home Assistant error log")
+
+    subparsers.add_parser("check-config", help="Validate HA configuration")
+
+    subparsers.add_parser(
+        "refresh",
+        help="Re-run workspace seeding (updates snapshots and inventory)",
+    )
+
     return parser
+
+
+def ensure_event_allowed():
+    if os.environ.get(ALLOW_EVENT_ENV) != "1":
+        raise ValueError(
+            "fire-event is disabled; set allow_event in add-on configuration"
+        )
+
+
+def ensure_automation_allowed():
+    if os.environ.get(ALLOW_AUTOMATION_ENV) != "1":
+        raise ValueError(
+            "create-automation is disabled; set allow_automation in add-on configuration"
+        )
+
+
+AREA_TEMPLATE = """\
+{% set result = [] -%}
+{% for aid in areas() -%}
+  {% set ents = area_entities(aid) | list -%}
+  {% set devs = area_devices(aid) | list -%}
+  {% set _ = result.append({"id": aid, "name": area_name(aid), "entities": ents, "devices": devs}) -%}
+{% endfor -%}
+{{ result | to_json }}"""
+
+DEVICE_TEMPLATE = """\
+{% set result = [] -%}
+{% for did in states | map(attribute='entity_id') | map('device_id') | select('ne', None) | unique | list -%}
+  {% set ents = device_entities(did) | list -%}
+  {% set attr = device_attr(did, 'name') -%}
+  {% set area = device_attr(did, 'area_id') -%}
+  {% set _ = result.append({"id": did, "name": attr, "area_id": area, "entities": ents}) -%}
+{% endfor -%}
+{{ result | to_json }}"""
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.command == "refresh":
+        proc = subprocess.run(
+            ["seed_workspace", "--max-age-hours", "1"],
+            check=False,
+            capture_output=False,
+        )
+        return proc.returncode
+
     if args.command == "call-service":
         try:
             ensure_allowed_service(args.domain, args.service)
+        except ValueError as err:
+            return fail(str(err))
+
+    if args.command == "fire-event":
+        try:
+            ensure_event_allowed()
+        except ValueError as err:
+            return fail(str(err))
+
+    if args.command in ("create-automation", "get-automation", "delete-automation", "list-automations"):
+        try:
+            ensure_automation_allowed()
         except ValueError as err:
             return fail(str(err))
 
@@ -226,6 +406,167 @@ def main():
             )
             print(output.decode("utf-8", errors="replace"))
             return 0
+
+        if args.command == "template":
+            body = {"template": args.template_text}
+            output = request_json("POST", "/template", token, base_url, body=body)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "history":
+            start = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+            start_iso = start.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            encoded = urllib.parse.quote(args.entity_id, safe="")
+            path = (
+                f"/history/period/{start_iso}"
+                f"?filter_entity_id={encoded}&minimal_response"
+            )
+            output = request_json("GET", path, token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "fire-event":
+            try:
+                payload = json.loads(args.json_payload)
+            except json.JSONDecodeError as err:
+                raise ValueError(f"invalid JSON payload: {err.msg}")
+            if not isinstance(payload, dict):
+                raise ValueError("event data must be a JSON object")
+            encoded_type = urllib.parse.quote(args.event_type, safe="")
+            output = request_json(
+                "POST", f"/events/{encoded_type}", token, base_url, body=payload
+            )
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "list-areas":
+            body = {"template": AREA_TEMPLATE}
+            output = request_json("POST", "/template", token, base_url, body=body)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "list-devices":
+            body = {"template": DEVICE_TEMPLATE}
+            output = request_json("POST", "/template", token, base_url, body=body)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "create-automation":
+            try:
+                payload = json.loads(args.json_payload)
+            except json.JSONDecodeError as err:
+                raise ValueError(f"invalid JSON payload: {err.msg}")
+            if not isinstance(payload, dict):
+                raise ValueError("automation config must be a JSON object")
+            encoded_id = urllib.parse.quote(args.automation_id, safe="")
+            output = request_json(
+                "POST",
+                f"/config/automation/config/{encoded_id}",
+                token,
+                base_url,
+                body=payload,
+            )
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "get-automation":
+            encoded_id = urllib.parse.quote(args.automation_id, safe="")
+            output = request_json(
+                "GET",
+                f"/config/automation/config/{encoded_id}",
+                token,
+                base_url,
+            )
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "delete-automation":
+            encoded_id = urllib.parse.quote(args.automation_id, safe="")
+            output = request_json(
+                "DELETE",
+                f"/config/automation/config/{encoded_id}",
+                token,
+                base_url,
+            )
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "list-automations":
+            output = request_json("GET", "/states", token, base_url)
+            all_states = json.loads(output.decode("utf-8", errors="replace"))
+            automations = []
+            for entity in all_states:
+                eid = entity.get("entity_id", "")
+                if not eid.startswith("automation."):
+                    continue
+                attrs = entity.get("attributes", {})
+                automations.append({
+                    "entity_id": eid,
+                    "state": entity.get("state", "unknown"),
+                    "alias": attrs.get("friendly_name", ""),
+                    "last_triggered": attrs.get("last_triggered", ""),
+                    "id": attrs.get("id", ""),
+                })
+            print(json.dumps(automations, indent=2, ensure_ascii=False))
+            return 0
+
+        if args.command == "logbook":
+            start = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+            start_iso = start.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            path = f"/logbook/{start_iso}"
+            if args.entity_id:
+                encoded = urllib.parse.quote(args.entity_id, safe="")
+                path += f"?entity={encoded}"
+            output = request_json("GET", path, token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "list-calendars":
+            output = request_json("GET", "/calendars", token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "calendar-events":
+            encoded = urllib.parse.quote(args.entity_id, safe="")
+            start = datetime.now(timezone.utc)
+            end = start + timedelta(hours=args.hours)
+            start_iso = start.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            end_iso = end.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            path = f"/calendars/{encoded}?start={start_iso}&end={end_iso}"
+            output = request_json("GET", path, token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "camera-snapshot":
+            encoded = urllib.parse.quote(args.entity_id, safe="")
+            image_data, content_type = request_raw(
+                f"/camera_proxy/{encoded}", token, base_url
+            )
+            ext = "jpg"
+            if "png" in content_type:
+                ext = "png"
+            workspace = os.environ.get("ZEROCLAW_WORKSPACE", "/data/workspace")
+            snapshot_dir = os.path.join(workspace, "camera")
+            os.makedirs(snapshot_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_name = args.entity_id.replace(".", "_")
+            filename = f"{safe_name}_{timestamp}.{ext}"
+            filepath = os.path.join(snapshot_dir, filename)
+            with open(filepath, "wb") as f:
+                f.write(image_data)
+            print(json.dumps({"path": filepath, "size": len(image_data)}))
+            return 0
+
+        if args.command == "error-log":
+            output = request_json("GET", "/error_log", token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
+        if args.command == "check-config":
+            output = request_json("POST", "/config/core/check_config", token, base_url)
+            print(output.decode("utf-8", errors="replace"))
+            return 0
+
     except ValueError as err:
         if args.command == "health":
             print(f"FAIL: {err}", file=sys.stderr)

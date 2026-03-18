@@ -81,6 +81,22 @@ def missing_required_keys(options: dict[str, object]) -> list[str]:
     return missing
 
 
+def bool_option(options: dict[str, object], key: str, default: bool = False) -> bool:
+    value = options.get(key)
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def float_option(
+    options: dict[str, object], key: str, default: float
+) -> float:
+    value = options.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return default
+
+
 def build_config(options: dict[str, object]) -> str:
     provider = normalize_string(options.get("provider"), "openrouter")
     api_key = normalize_string(options.get("api_key"), "")
@@ -88,6 +104,9 @@ def build_config(options: dict[str, object]) -> str:
     bot_token = normalize_string(options.get("telegram_bot_token"), "")
     allowed_users = normalize_allowed_users(options.get("telegram_allowed_users"))
     autonomy_level = map_autonomy_level(options.get("autonomy_level"))
+    enable_memory = bool_option(options, "enable_memory", True)
+    enable_cost = bool_option(options, "enable_cost_tracking", True)
+    daily_cost = float_option(options, "daily_cost_limit_usd", 2.0)
 
     model_line = ""
     if isinstance(model, str) and model.strip():
@@ -113,7 +132,36 @@ workspace_only = true
 forbidden_paths = []
 max_actions_per_hour = 120
 max_cost_per_day_cents = 500
+
+[agent]
+max_tool_iterations = 15
+max_history_messages = 50
+
+[cron]
+enabled = true
+
+[scheduler]
+enabled = true
+max_tasks = 64
+max_concurrent = 4
 """
+
+    if enable_memory:
+        config_text += """
+[memory]
+backend = "sqlite"
+auto_save = true
+"""
+
+    if enable_cost:
+        config_text += f"""
+[cost]
+enabled = true
+daily_limit_usd = {daily_cost:.2f}
+monthly_limit_usd = {daily_cost * 31:.2f}
+warn_at_percent = 80
+"""
+
     lines = [config_text.strip(), ""]
 
     return "\n".join(lines)

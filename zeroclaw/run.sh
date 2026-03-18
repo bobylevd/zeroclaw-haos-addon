@@ -51,9 +51,55 @@ telegram_health_check() {
     fi
 }
 
+send_startup_greeting() {
+    ONBOARDING_MARKER="${ZEROCLAW_WORKSPACE}/.onboarded"
+    BOT_TOKEN=$(jq -r '.telegram_bot_token // empty' /data/options.json)
+    ALLOWED=$(jq -r '.telegram_allowed_users[0] // empty' /data/options.json)
+
+    if [ -z "${BOT_TOKEN}" ] || [ -z "${ALLOWED}" ] || [ "${ALLOWED}" = "*" ]; then
+        return 0
+    fi
+
+    INVENTORY="${ZEROCLAW_WORKSPACE}/homeassistant/inventory.md"
+    if [ -f "${INVENTORY}" ]; then
+        ENTITY_COUNT=$(grep -c '^\|' "${INVENTORY}" 2>/dev/null || echo "0")
+        AREA_COUNT=$(grep -c '^## ' "${INVENTORY}" 2>/dev/null || echo "0")
+    else
+        ENTITY_COUNT="0"
+        AREA_COUNT="0"
+    fi
+
+    if [ -f "${ONBOARDING_MARKER}" ]; then
+        MSG="🏠 ZeroClaw restarted. Found ${AREA_COUNT} areas, ${ENTITY_COUNT} entities. Ready."
+    else
+        MSG="👋 ZeroClaw is connected to your Home Assistant.
+
+I found ${AREA_COUNT} areas and ${ENTITY_COUNT} entities.
+
+Send me a message like:
+• \"What devices do I have?\"
+• \"Turn on the kitchen light\"
+• \"Set bedroom to 22 degrees\"
+
+I'll learn your preferences as we go. Say \"help\" anytime."
+        touch "${ONBOARDING_MARKER}"
+    fi
+
+    TG_URL="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+    PAYLOAD=$(printf '{"chat_id":%s,"text":"%s","parse_mode":"Markdown"}' \
+        "${ALLOWED}" \
+        "$(printf '%s' "${MSG}" | sed 's/"/\\"/g')")
+
+    curl -sS -X POST "${TG_URL}" \
+        -H "Content-Type: application/json" \
+        -d "${PAYLOAD}" >/dev/null 2>&1 || true
+}
+
 configure_ha_api_permissions() {
     HA_API_ALLOW_COVER=""
     HA_API_ALLOW_SCRIPT=""
+    HA_API_ALLOW_AUTOMATION=""
+    HA_API_ALLOW_EVENT=""
 
     if jq -e '.allow_cover == true' /data/options.json >/dev/null 2>&1; then
         HA_API_ALLOW_COVER=1
@@ -63,8 +109,22 @@ configure_ha_api_permissions() {
         HA_API_ALLOW_SCRIPT=1
     fi
 
+    if jq -e '.allow_automation == true' /data/options.json >/dev/null 2>&1; then
+        HA_API_ALLOW_AUTOMATION=1
+    fi
+
+    if jq -e '.allow_event == true' /data/options.json >/dev/null 2>&1; then
+        HA_API_ALLOW_EVENT=1
+    fi
+
     export HA_API_ALLOW_COVER
     export HA_API_ALLOW_SCRIPT
+    export HA_API_ALLOW_AUTOMATION
+    export HA_API_ALLOW_EVENT
+}
+
+snapshot_max_age_hours() {
+    jq -r '.snapshot_refresh_hours // 4' /data/options.json
 }
 
 mkdir -p "${CONFIG_DIR}" "${ZEROCLAW_WORKSPACE}"
@@ -89,12 +149,13 @@ if is_daemon_start "$@"; then
 
     if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
         ha_health_check
-        seed_workspace
+        seed_workspace --max-age-hours "$(snapshot_max_age_hours)"
     fi
 
     ensure_skill
     generate_config
     chmod 600 "${CONFIG_PATH}"
+    send_startup_greeting
     exec zeroclaw daemon
 fi
 

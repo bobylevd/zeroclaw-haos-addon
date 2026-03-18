@@ -23,6 +23,12 @@ SAFE_STATE_ATTRIBUTES = {
     "current_temperature",
     "target_temp_high",
     "target_temp_low",
+    "brightness_pct",
+    "brightness",
+    "color_mode",
+    "effect",
+    "min_mireds",
+    "max_mireds",
 }
 SECRET_KEYWORDS = (
     "token",
@@ -32,7 +38,12 @@ SECRET_KEYWORDS = (
     "access",
     "auth",
 )
-BASE_COMMON_DOMAINS = ["light", "switch", "scene", "fan", "climate", "media_player"]
+BASE_COMMON_DOMAINS = [
+    "light", "switch", "scene", "fan", "climate", "media_player",
+    "cover", "binary_sensor", "sensor", "input_boolean", "input_number",
+    "input_select", "humidifier", "vacuum", "water_heater", "remote",
+    "button", "number", "select",
+]
 
 
 def fail(message):
@@ -139,9 +150,12 @@ def sanitize_services(raw_services):
     return sanitized
 
 
-def run_ha_api(command):
+def run_ha_api(command, extra_args=None):
+    cmd = ["ha_api", command]
+    if extra_args:
+        cmd.extend(extra_args)
     proc = subprocess.run(
-        ["ha_api", command],
+        cmd,
         check=False,
         capture_output=True,
         text=True,
@@ -155,6 +169,13 @@ def run_ha_api(command):
         return json.loads(proc.stdout)
     except json.JSONDecodeError as err:
         raise RuntimeError(f"ha_api {command} returned invalid JSON: {err.msg}") from err
+
+
+def run_ha_api_optional(command, extra_args=None):
+    try:
+        return run_ha_api(command, extra_args)
+    except RuntimeError:
+        return None
 
 
 def write_json(path, payload):
@@ -179,51 +200,116 @@ def domain_for_entity(entity_id):
     return entity_id.split(".", 1)[0]
 
 
-def render_inventory(states):
-    domain_counts = {}
-    present_domains = set()
+def state_summary(item):
+    state = item.get("state", "unknown")
+    attrs = item.get("attributes", {})
+    if not isinstance(attrs, dict):
+        attrs = {}
+    parts = [state]
+    unit = attrs.get("unit_of_measurement")
+    if isinstance(unit, str) and unit:
+        parts = [f"{state} {unit}"]
+    brightness = attrs.get("brightness_pct") if "brightness_pct" in attrs else None
+    if brightness is not None:
+        parts.append(f"brightness:{brightness}%")
+    current_temp = attrs.get("current_temperature")
+    if current_temp is not None:
+        parts.append(f"current:{current_temp}")
+    return ", ".join(parts)
 
+
+def render_inventory(states, areas):
+    state_map = {}
     for item in states:
-        entity_id = item.get("entity_id", "")
-        if "." not in entity_id:
-            continue
-        domain = domain_for_entity(entity_id)
-        present_domains.add(domain)
+        eid = item.get("entity_id", "")
+        if eid:
+            state_map[eid] = item
+
+    domain_counts = {}
+    for eid in state_map:
+        domain = domain_for_entity(eid)
         domain_counts[domain] = domain_counts.get(domain, 0) + 1
 
-    ordered_domains = BASE_COMMON_DOMAINS[:]
-    for optional_domain in ("cover", "script"):
-        if optional_domain in present_domains:
-            ordered_domains.append(optional_domain)
-
-    lines = ["# Home Assistant Inventory", "", "## Entity Counts by Domain", ""]
+    lines = ["# Home Assistant Context", ""]
+    lines.append("## Entity Summary")
+    lines.append("")
     for domain in sorted(domain_counts):
         lines.append(f"- {domain}: {domain_counts[domain]}")
-
     lines.append("")
-    for domain in ordered_domains:
-        rows = []
-        for item in states:
-            entity_id = item.get("entity_id", "")
-            if not entity_id.startswith(f"{domain}."):
+
+    assigned_entities = set()
+
+    if areas:
+        for area in sorted(areas, key=lambda a: a.get("name", "")):
+            area_name = area.get("name", area.get("id", "unknown"))
+            area_entities = area.get("entities", [])
+            if not area_entities:
                 continue
-            attributes = item.get("attributes", {})
-            friendly_name = attributes.get("friendly_name") if isinstance(attributes, dict) else None
-            label = friendly_name if isinstance(friendly_name, str) and friendly_name else entity_id
-            rows.append((label, entity_id))
 
-        if not rows:
+            lines.append(f"## {area_name}")
+            lines.append("")
+            lines.append("| entity_id | friendly_name | state |")
+            lines.append("| --- | --- | --- |")
+
+            rows = []
+            for eid in area_entities:
+                if not isinstance(eid, str):
+                    continue
+                assigned_entities.add(eid)
+                item = state_map.get(eid)
+                if item is None:
+                    continue
+                domain = domain_for_entity(eid)
+                if domain not in BASE_COMMON_DOMAINS and domain != "script":
+                    continue
+                attrs = item.get("attributes", {})
+                fname = attrs.get("friendly_name", "") if isinstance(attrs, dict) else ""
+                summary = state_summary(item)
+                rows.append((eid, fname, summary))
+
+            rows.sort(key=lambda r: r[0])
+            for eid, fname, summary in rows:
+                safe_fname = str(fname).replace("|", "\\|")
+                safe_eid = eid.replace("|", "\\|")
+                safe_summary = summary.replace("|", "\\|")
+                lines.append(f"| {safe_eid} | {safe_fname} | {safe_summary} |")
+            lines.append("")
+
+    unassigned = []
+    for item in states:
+        eid = item.get("entity_id", "")
+        if eid in assigned_entities or not eid:
             continue
+        domain = domain_for_entity(eid)
+        if domain not in BASE_COMMON_DOMAINS and domain != "script":
+            continue
+        attrs = item.get("attributes", {})
+        fname = attrs.get("friendly_name", "") if isinstance(attrs, dict) else ""
+        summary = state_summary(item)
+        unassigned.append((eid, fname, summary))
 
-        rows.sort(key=lambda value: (value[0].lower(), value[1]))
-        lines.append(f"## {domain}")
+    if unassigned:
+        lines.append("## Unassigned Entities")
         lines.append("")
-        lines.append("| friendly_name | entity_id |")
-        lines.append("| --- | --- |")
-        for label, entity_id in rows:
-            safe_label = label.replace("|", "\\|")
-            safe_entity = entity_id.replace("|", "\\|")
-            lines.append(f"| {safe_label} | {safe_entity} |")
+        lines.append("| entity_id | friendly_name | state |")
+        lines.append("| --- | --- | --- |")
+        unassigned.sort(key=lambda r: r[0])
+        for eid, fname, summary in unassigned:
+            safe_fname = str(fname).replace("|", "\\|")
+            safe_eid = eid.replace("|", "\\|")
+            safe_summary = summary.replace("|", "\\|")
+            lines.append(f"| {safe_eid} | {safe_fname} | {safe_summary} |")
+        lines.append("")
+
+    scenes = [s for s in states if domain_for_entity(s.get("entity_id", "")) == "scene"]
+    if scenes:
+        lines.append("## Available Scenes")
+        lines.append("")
+        for s in sorted(scenes, key=lambda x: x.get("entity_id", "")):
+            eid = s.get("entity_id", "")
+            attrs = s.get("attributes", {})
+            fname = attrs.get("friendly_name", eid) if isinstance(attrs, dict) else eid
+            lines.append(f"- `{eid}` — {fname}")
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"
@@ -256,6 +342,9 @@ def main():
     if not isinstance(raw_states, list):
         return fail("ha_api list-states returned non-list JSON")
 
+    raw_areas = run_ha_api_optional("list-areas")
+    areas = raw_areas if isinstance(raw_areas, list) else []
+
     sanitized_states = []
     for item in raw_states:
         if isinstance(item, dict):
@@ -269,7 +358,12 @@ def main():
 
     write_json(states_path, sanitized_states)
     write_json(services_path, sanitized_services)
-    inventory_path.write_text(render_inventory(sanitized_states), encoding="utf-8")
+    if areas:
+        areas_path = snapshot_dir / "areas.json"
+        write_json(areas_path, areas)
+    inventory_path.write_text(
+        render_inventory(sanitized_states, areas), encoding="utf-8"
+    )
 
     print(f"Seeded Home Assistant snapshot at {snapshot_dir}")
     return 0

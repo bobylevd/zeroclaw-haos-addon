@@ -19,6 +19,12 @@ options:
   autonomy_level: supervised
   allow_cover: false
   allow_script: false
+  allow_automation: false
+  allow_event: false
+  enable_memory: true
+  enable_cost_tracking: true
+  daily_cost_limit_usd: 2.0
+  snapshot_refresh_hours: 4
 schema:
   provider: str
   api_key: password
@@ -28,3 +34,9 @@ schema:
   autonomy_level: list(read_only|supervised|full)
   allow_cover: bool
   allow_script: bool
+  allow_automation: bool
+  allow_event: bool
+  enable_memory: bool
+  enable_cost_tracking: bool
+  daily_cost_limit_usd: float?
+  snapshot_refresh_hours: int?
