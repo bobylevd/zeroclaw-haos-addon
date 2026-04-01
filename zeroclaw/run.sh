@@ -10,7 +10,7 @@ CONFIG_HELPER="/usr/local/bin/generate_config"
 SKILL_TEMPLATE="/opt/zeroclaw/skills/homeassistant/SKILL.md"
 
 seed_workspace() {
-    /usr/local/bin/seed_workspace
+    /usr/local/bin/seed_workspace "$@"
 }
 
 generate_config() {
@@ -38,10 +38,20 @@ is_daemon_start() {
 }
 
 ha_health_check() {
-    if ! ha_api health >/dev/null 2>&1; then
-        printf '%s\n' "ERROR: Home Assistant is unreachable; verify add-on configuration and Supervisor connectivity." >&2
-        exit 1
-    fi
+    retries=0
+    max_retries=5
+    while [ "${retries}" -lt "${max_retries}" ]; do
+        if ha_api health >/dev/null 2>&1; then
+            return 0
+        fi
+        retries=$((retries + 1))
+        if [ "${retries}" -lt "${max_retries}" ]; then
+            printf '%s\n' "Home Assistant not ready, retrying in 5s (${retries}/${max_retries})..."
+            sleep 5
+        fi
+    done
+    printf '%s\n' "ERROR: Home Assistant is unreachable after ${max_retries} attempts; verify add-on configuration and Supervisor connectivity." >&2
+    exit 1
 }
 
 telegram_health_check() {
@@ -52,7 +62,6 @@ telegram_health_check() {
 }
 
 send_startup_greeting() {
-    ONBOARDING_MARKER="${ZEROCLAW_WORKSPACE}/.onboarded"
     BOT_TOKEN=$(jq -r '.telegram_bot_token // empty' /data/options.json)
     ALLOWED=$(jq -r '.telegram_allowed_users[0] // empty' /data/options.json)
 
@@ -69,21 +78,7 @@ send_startup_greeting() {
         AREA_COUNT="0"
     fi
 
-    if [ -f "${ONBOARDING_MARKER}" ]; then
-        MSG="🏠 ZeroClaw restarted. Found ${AREA_COUNT} areas, ${ENTITY_COUNT} entities. Ready."
-    else
-        MSG="👋 ZeroClaw is connected to your Home Assistant.
-
-I found ${AREA_COUNT} areas and ${ENTITY_COUNT} entities.
-
-Send me a message like:
-• \"What devices do I have?\"
-• \"Turn on the kitchen light\"
-• \"Set bedroom to 22 degrees\"
-
-I'll learn your preferences as we go. Say \"help\" anytime."
-        touch "${ONBOARDING_MARKER}"
-    fi
+    MSG="ZeroClaw started. Found ${AREA_COUNT} areas, ${ENTITY_COUNT} entities. Ready."
 
     TG_URL="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
     PAYLOAD=$(printf '{"chat_id":%s,"text":"%s","parse_mode":"Markdown"}' \
@@ -149,11 +144,16 @@ if is_daemon_start "$@"; then
 
     if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
         ha_health_check
-        seed_workspace --max-age-hours "$(snapshot_max_age_hours)"
+        if ! seed_workspace --max-age-hours "$(snapshot_max_age_hours)"; then
+            printf '%s\n' "WARNING: workspace seeding failed; agent will start with stale or missing snapshots" >&2
+        fi
     fi
 
     ensure_skill
-    generate_config
+    if ! generate_config; then
+        printf '%s\n' "ERROR: config generation failed; cannot start daemon" >&2
+        exit 1
+    fi
     chmod 600 "${CONFIG_PATH}"
     send_startup_greeting
     exec zeroclaw daemon

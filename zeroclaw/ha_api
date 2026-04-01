@@ -59,6 +59,13 @@ ALLOW_AUTOMATION_ENV = "HA_API_ALLOW_AUTOMATION"
 DENIED_SERVICE_DOMAINS = {"lock", "alarm_control_panel"}
 DENIED_SUBSTRINGS = ("restart", "shutdown", "reboot")
 
+MAX_TEMPLATE_LENGTH = 2048
+DENIED_TEMPLATE_PATTERNS = (
+    "__class__", "__mro__", "__subclasses__", "__globals__", "__builtins__",
+    "__import__", "subprocess", "os.popen", "os.system",
+    "lipsum", "cycler", "joiner",
+)
+
 
 def fail(message):
     print(f"ERROR: {message}", file=sys.stderr)
@@ -218,7 +225,7 @@ def build_parser():
     call_service.add_argument("service")
     call_service.add_argument("--json", required=True, dest="json_payload")
 
-    template = subparsers.add_parser("template", help="Render a Jinja2 template")
+    template = subparsers.add_parser("template", help="Render a Jinja2 template (read-only queries)")
     template.add_argument("--template", required=True, dest="template_text")
 
     history = subparsers.add_parser("history", help="GET entity history")
@@ -408,7 +415,18 @@ def main():
             return 0
 
         if args.command == "template":
-            body = {"template": args.template_text}
+            tpl = args.template_text
+            if len(tpl) > MAX_TEMPLATE_LENGTH:
+                raise ValueError(
+                    f"template exceeds {MAX_TEMPLATE_LENGTH} character limit"
+                )
+            tpl_lower = tpl.lower()
+            for pattern in DENIED_TEMPLATE_PATTERNS:
+                if pattern in tpl_lower:
+                    raise ValueError(
+                        f"template contains blocked pattern: '{pattern}'"
+                    )
+            body = {"template": tpl}
             output = request_json("POST", "/template", token, base_url, body=body)
             print(output.decode("utf-8", errors="replace"))
             return 0
